@@ -336,6 +336,54 @@ enum LegalGlobal {
     Variable,
 }
 
+fn is_type_opcode(opcode: Op) -> bool {
+    matches!(
+        opcode,
+        Op::TypeVoid
+            | Op::TypeBool
+            | Op::TypeInt
+            | Op::TypeFloat
+            | Op::TypeVector
+            | Op::TypeMatrix
+            | Op::TypeImage
+            | Op::TypeSampler
+            | Op::TypeSampledImage
+            | Op::TypeArray
+            | Op::TypeRuntimeArray
+            | Op::TypeStruct
+            | Op::TypeOpaque
+            | Op::TypePointer
+            | Op::TypeFunction
+            | Op::TypeEvent
+            | Op::TypeDeviceEvent
+            | Op::TypeReserveId
+            | Op::TypeQueue
+            | Op::TypePipe
+            | Op::TypeAccelerationStructureKHR
+            | Op::TypeRayQueryKHR
+            | Op::TypeForwardPointer
+    )
+}
+
+fn is_constant_opcode(opcode: Op) -> bool {
+    matches!(
+        opcode,
+        Op::ConstantTrue
+            | Op::ConstantFalse
+            | Op::Constant
+            | Op::ConstantComposite
+            | Op::ConstantSampler
+            | Op::ConstantNull
+            | Op::SpecConstantTrue
+            | Op::SpecConstantFalse
+            | Op::SpecConstant
+            | Op::SpecConstantComposite
+            | Op::SpecConstantOp
+            | Op::ConstantCompositeContinuedINTEL
+            | Op::SpecConstantCompositeContinuedINTEL
+    )
+}
+
 impl LegalGlobal {
     fn gather_from_module(module: &Module) -> FxHashMap<Word, Self> {
         let mut legal_globals = FxHashMap::<_, Self>::default();
@@ -343,8 +391,8 @@ impl LegalGlobal {
             let global = match inst.class.opcode {
                 Op::TypePointer => Self::TypePointer(inst.operands[0].unwrap_storage_class()),
                 Op::Variable => Self::Variable,
-                op if rspirv::grammar::reflect::is_type(op) => Self::TypeNonPointer,
-                op if rspirv::grammar::reflect::is_constant(op) => Self::Const,
+                op if is_type_opcode(op) => Self::TypeNonPointer,
+                op if is_constant_opcode(op) => Self::Const,
 
                 // FIXME(eddyb) should this be `unreachable!()`?
                 _ => continue,

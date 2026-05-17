@@ -13,7 +13,7 @@ use rspirv::spirv::{
     GroupOperation, ImageOperands, KernelProfilingInfo, LoopControl, MemoryAccess, MemorySemantics,
     Op, RayFlags, SelectionControl, StorageClass, Word,
 };
-use rustc_abi::{BackendRepr, Primitive};
+use rustc_abi::{Align, BackendRepr, Primitive, Size};
 use rustc_ast::ast::{InlineAsmOptions, InlineAsmTemplatePiece};
 use rustc_codegen_ssa::mir::operand::OperandValue;
 use rustc_codegen_ssa::mir::place::PlaceRef;
@@ -32,7 +32,8 @@ pub struct InstructionTable {
 
 impl InstructionTable {
     pub fn new() -> Self {
-        let table = rspirv::grammar::CoreInstructionTable::iter()
+        let table = rspirv::grammar::INSTRUCTION_TABLE
+            .iter()
             .map(|inst| (inst.opname, inst))
             .collect();
         Self { table }
@@ -375,8 +376,33 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 SpirvType::Float(inst.operands[0].unwrap_literal_bit32()).def(self.span(), self)
             }
             Op::TypeStruct => {
-                self.err("`OpTypeStruct` in asm! is not supported");
-                return;
+                let field_types = inst
+                    .operands
+                    .iter()
+                    .map(|operand| operand.unwrap_id_ref())
+                    .collect::<Vec<_>>();
+                if let [inner_type] = field_types.as_slice()
+                    && matches!(
+                        self.cx.lookup_type(*inner_type),
+                        SpirvType::RuntimeArray { .. }
+                    )
+                {
+                    SpirvType::InterfaceBlock {
+                        inner_type: *inner_type,
+                    }
+                    .def(self.span(), self)
+                } else {
+                    let field_offsets = vec![Size::from_bytes(0); field_types.len()];
+                    SpirvType::Adt {
+                        def_id: None,
+                        align: Align::from_bytes(4).unwrap(),
+                        size: None,
+                        field_types: &field_types,
+                        field_offsets: &field_offsets,
+                        field_names: None,
+                    }
+                    .def(self.span(), self)
+                }
             }
             Op::TypeVector => {
                 self.struct_err(
@@ -453,7 +479,6 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 }
                 return;
             }
-
             op => {
                 // NOTE(eddyb) allowing the instruction to be added below avoids
                 // spurious "`noreturn` requires a terminator at the end" errors.
@@ -559,9 +584,13 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 return;
             }
         };
-        let inst_class = inst_name
-            .strip_prefix("Op")
-            .and_then(|n| self.cx.instruction_table.table.get(n));
+        let inst_class = inst_name.strip_prefix("Op").and_then(|n| {
+            let n = match n {
+                "DemoteToHelperInvocationEXT" => "DemoteToHelperInvocation",
+                _ => n,
+            };
+            self.cx.instruction_table.table.get(n).copied()
+        });
         let inst_class = if let Some(inst) = inst_class {
             inst
         } else {
@@ -1537,6 +1566,9 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
                 Ok(x) => inst.operands.push(dr::Operand::StoreCacheControl(x)),
                 Err(()) => self.err(format!("unknown StoreCacheControl {word}")),
             },
+            (kind, Some(word)) => {
+                self.err(format!("unsupported operand kind {kind:?} for `{word}`"));
+            }
             (kind, None) => match token {
                 Token::Word(_) => bug!(),
                 Token::String(_) => {
@@ -1571,16 +1603,13 @@ pub const IMAGE_OPERANDS: &[(&str, ImageOperands)] = &[
     ("Sample", ImageOperands::SAMPLE),
     ("MinLod", ImageOperands::MIN_LOD),
     ("MakeTexelAvailable", ImageOperands::MAKE_TEXEL_AVAILABLE),
-    (
-        "MakeTexelAvailableKHR",
-        ImageOperands::MAKE_TEXEL_AVAILABLE_KHR,
-    ),
+    ("MakeTexelAvailableKHR", ImageOperands::MAKE_TEXEL_AVAILABLE),
     ("MakeTexelVisible", ImageOperands::MAKE_TEXEL_VISIBLE),
-    ("MakeTexelVisibleKHR", ImageOperands::MAKE_TEXEL_VISIBLE_KHR),
+    ("MakeTexelVisibleKHR", ImageOperands::MAKE_TEXEL_VISIBLE),
     ("NonPrivateTexel", ImageOperands::NON_PRIVATE_TEXEL),
-    ("NonPrivateTexelKHR", ImageOperands::NON_PRIVATE_TEXEL_KHR),
+    ("NonPrivateTexelKHR", ImageOperands::NON_PRIVATE_TEXEL),
     ("VolatileTexel", ImageOperands::VOLATILE_TEXEL),
-    ("VolatileTexelKHR", ImageOperands::VOLATILE_TEXEL_KHR),
+    ("VolatileTexelKHR", ImageOperands::VOLATILE_TEXEL),
     ("SignExtend", ImageOperands::SIGN_EXTEND),
     ("ZeroExtend", ImageOperands::ZERO_EXTEND),
 ];
@@ -1618,7 +1647,7 @@ pub const FUNCTION_CONTROL: &[(&str, FunctionControl)] = &[
 ];
 pub const MEMORY_SEMANTICS: &[(&str, MemorySemantics)] = &[
     ("Relaxed", MemorySemantics::RELAXED),
-    ("None", MemorySemantics::NONE),
+    ("None", MemorySemantics::RELAXED),
     ("Acquire", MemorySemantics::ACQUIRE),
     ("Release", MemorySemantics::RELEASE),
     ("AcquireRelease", MemorySemantics::ACQUIRE_RELEASE),
@@ -1639,11 +1668,11 @@ pub const MEMORY_SEMANTICS: &[(&str, MemorySemantics)] = &[
     ),
     ("ImageMemory", MemorySemantics::IMAGE_MEMORY),
     ("OutputMemory", MemorySemantics::OUTPUT_MEMORY),
-    ("OutputMemoryKHR", MemorySemantics::OUTPUT_MEMORY_KHR),
+    ("OutputMemoryKHR", MemorySemantics::OUTPUT_MEMORY),
     ("MakeAvailable", MemorySemantics::MAKE_AVAILABLE),
-    ("MakeAvailableKHR", MemorySemantics::MAKE_AVAILABLE_KHR),
+    ("MakeAvailableKHR", MemorySemantics::MAKE_AVAILABLE),
     ("MakeVisible", MemorySemantics::MAKE_VISIBLE),
-    ("MakeVisibleKHR", MemorySemantics::MAKE_VISIBLE_KHR),
+    ("MakeVisibleKHR", MemorySemantics::MAKE_VISIBLE),
     ("Volatile", MemorySemantics::VOLATILE),
 ];
 pub const MEMORY_ACCESS: &[(&str, MemoryAccess)] = &[
@@ -1654,18 +1683,12 @@ pub const MEMORY_ACCESS: &[(&str, MemoryAccess)] = &[
     ("MakePointerAvailable", MemoryAccess::MAKE_POINTER_AVAILABLE),
     (
         "MakePointerAvailableKHR",
-        MemoryAccess::MAKE_POINTER_AVAILABLE_KHR,
+        MemoryAccess::MAKE_POINTER_AVAILABLE,
     ),
     ("MakePointerVisible", MemoryAccess::MAKE_POINTER_VISIBLE),
-    (
-        "MakePointerVisibleKHR",
-        MemoryAccess::MAKE_POINTER_VISIBLE_KHR,
-    ),
+    ("MakePointerVisibleKHR", MemoryAccess::MAKE_POINTER_VISIBLE),
     ("NonPrivatePointer", MemoryAccess::NON_PRIVATE_POINTER),
-    (
-        "NonPrivatePointerKHR",
-        MemoryAccess::NON_PRIVATE_POINTER_KHR,
-    ),
+    ("NonPrivatePointerKHR", MemoryAccess::NON_PRIVATE_POINTER),
 ];
 pub const KERNEL_PROFILING_INFO: &[(&str, KernelProfilingInfo)] = &[
     ("None", KernelProfilingInfo::NONE),

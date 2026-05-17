@@ -1096,9 +1096,12 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
         | Op::ImageBlockMatchSSDQCOM
         | Op::ImageBlockMatchSADQCOM => reserved!(SPV_QCOM_image_processing),
         // SPV_AMDX_shader_enqueue
-        Op::FinalizeNodePayloadsAMDX
+        Op::AllocateNodePayloadsAMDX
+        | Op::EnqueueNodePayloadsAMDX
+        | Op::TypeNodePayloadArrayAMDX
         | Op::FinishWritingNodePayloadAMDX
-        | Op::InitializeNodePayloadsAMDX => reserved!(SPV_AMDX_shader_enqueue),
+        | Op::NodePayloadArrayLengthAMDX
+        | Op::IsNodePayloadValidAMDX => reserved!(SPV_AMDX_shader_enqueue),
         // SPV_NV_displacement_micromap
         Op::FetchMicroTriangleVertexPositionNV | Op::FetchMicroTriangleVertexBarycentricNV => {
             reserved!(SPV_NV_displacement_micromap)
@@ -1124,6 +1127,7 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
         | Op::SpecConstantCompositeContinuedINTEL
         | Op::ControlBarrierArriveINTEL
         | Op::ControlBarrierWaitINTEL => reserved!(unknown_extension_INTEL),
+        _ => {}
     }
 
     None
